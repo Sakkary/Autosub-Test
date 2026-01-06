@@ -66,13 +66,14 @@ class FLACConverter(object): # pylint: disable=too-few-public-methods
             start = max(0, start - self.include_before)
             end += self.include_after
             temp = tempfile.NamedTemporaryFile(suffix='.flac', delete=False)
+            temp.close()
             command = ["ffmpeg", "-ss", str(start), "-t", str(end - start),
                        "-y", "-i", self.source_path,
                        "-loglevel", "error", temp.name]
             use_shell = True if os.name == "nt" else False
             subprocess.check_output(command, stdin=open(os.devnull), shell=use_shell)
-            read_data = temp.read()
-            temp.close()
+            with open(temp.name, "rb") as output_file:
+                read_data = output_file.read()
             os.unlink(temp.name)
             return read_data
 
@@ -177,6 +178,7 @@ def extract_audio(filename, channels=1, rate=16000):
     Extract audio from an input file to a temporary WAV file.
     """
     temp = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
+    temp.close()
     if not os.path.isfile(filename):
         print("The given file does not exist: {}".format(filename))
         raise Exception("Invalid filepath: {}".format(filename))
@@ -246,7 +248,7 @@ def generate_subtitles( # pylint: disable=too-many-locals,too-many-arguments
 
     regions = find_speech_regions(audio_filename)
 
-    pool = multiprocessing.Pool(concurrency)
+    pool = None
     converter = FLACConverter(source_path=audio_filename)
     recognizer = SpeechRecognizer(language=src_language, rate=audio_rate,
                                   api_key=GOOGLE_SPEECH_API_KEY)
@@ -254,6 +256,7 @@ def generate_subtitles( # pylint: disable=too-many-locals,too-many-arguments
     transcripts = []
     if regions:
         try:
+            pool = multiprocessing.Pool(concurrency)
             widgets = ["Converting speech regions to FLAC files: ", Percentage(), ' ', Bar(), ' ',
                        ETA()]
             pbar = ProgressBar(widgets=widgets, maxval=len(regions)).start()
@@ -299,6 +302,10 @@ def generate_subtitles( # pylint: disable=too-many-locals,too-many-arguments
             pool.join()
             print("Cancelling transcription")
             raise
+        finally:
+            if pool is not None:
+                pool.close()
+                pool.join()
 
     timed_subtitles = [(r, t) for r, t in zip(regions, transcripts) if t]
     formatter = FORMATTERS.get(subtitle_file_format)
